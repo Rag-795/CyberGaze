@@ -384,7 +384,13 @@ function renderFolders() {
         return;
     }
 
-    container.innerHTML = folders.map(folder => `
+    // Store folder data for event handlers
+    window._folderData = {};
+    folders.forEach((folder, index) => {
+        window._folderData[index] = folder;
+    });
+
+    container.innerHTML = folders.map((folder, index) => `
     <div class="folder-card ${folder.is_locked ? 'locked' : 'unlocked'}">
       <div class="folder-icon ${folder.is_locked ? 'locked' : 'unlocked'}">
         ${folder.is_locked ? `
@@ -400,8 +406,8 @@ function renderFolders() {
         `}
       </div>
       <div class="folder-info">
-        <div class="folder-name">${folder.name}</div>
-        <div class="folder-path">${folder.path}</div>
+        <div class="folder-name">${escapeHtml(folder.name)}</div>
+        <div class="folder-path">${escapeHtml(folder.path)}</div>
       </div>
       <div class="folder-meta">
         <span>${folder.size}</span>
@@ -409,7 +415,7 @@ function renderFolders() {
       </div>
       <div class="folder-actions">
         ${folder.is_locked ? `
-          <button class="btn btn-primary" onclick="unlockFolder('${folder.path}')">
+          <button class="btn btn-primary" data-action="unlock" data-index="${index}">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
@@ -417,7 +423,7 @@ function renderFolders() {
             Unlock
           </button>
         ` : `
-          <button class="btn btn-secondary" onclick="openFolder('${folder.path}')">
+          <button class="btn btn-secondary" data-action="open" data-index="${index}">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
               <polyline points="15 3 21 3 21 9"/>
@@ -425,7 +431,7 @@ function renderFolders() {
             </svg>
             Open
           </button>
-          <button class="btn btn-primary" onclick="lockFolder('${folder.path}')">
+          <button class="btn btn-primary" data-action="lock" data-index="${index}">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
@@ -433,7 +439,7 @@ function renderFolders() {
             Lock
           </button>
         `}
-        <button class="btn btn-ghost" onclick="removeFolder('${folder.folder_id}')">
+        <button class="btn btn-ghost" data-action="remove" data-folder-id="${folder.folder_id}">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -442,6 +448,39 @@ function renderFolders() {
       </div>
     </div>
   `).join('');
+
+    // Add event delegation for folder actions
+    container.querySelectorAll('[data-action]').forEach(btn => {
+        btn.addEventListener('click', handleFolderAction);
+    });
+}
+
+// Escape HTML to prevent XSS and handle special characters
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Handle folder action buttons via event delegation
+function handleFolderAction(event) {
+    const btn = event.currentTarget;
+    const action = btn.dataset.action;
+    const index = btn.dataset.index;
+    const folderId = btn.dataset.folderId;
+
+    if (action === 'unlock' && index !== undefined) {
+        const folder = window._folderData[index];
+        if (folder) unlockFolder(folder.path);
+    } else if (action === 'open' && index !== undefined) {
+        const folder = window._folderData[index];
+        if (folder) openFolder(folder.path);
+    } else if (action === 'lock' && index !== undefined) {
+        const folder = window._folderData[index];
+        if (folder) lockFolder(folder.path);
+    } else if (action === 'remove' && folderId) {
+        removeFolder(folderId);
+    }
 }
 
 async function addFolder() {

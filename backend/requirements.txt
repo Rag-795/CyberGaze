@@ -1,18 +1,19 @@
-# CyberGaze Backend Dependencies
-
 # Web Framework
-flask
-flask-cors
+flask>=2.3
+flask-cors>=4.0
 
-# Face Recognition with FaceNet (PyTorch)
-torch
-torchvision
-facenet-pytorch
+# Face Recognition (FaceNet - PyTorch)
+torch>=2.0,<3.0
+torchvision>=0.15
+facenet-pytorch>=2.5
 
 # Image Processing
-opencv-python
-numpy
-Pillow
+opencv-python>=4.8
+numpy>=1.24
+Pillow>=10.0
+
+# Configuration
+python-dotenv>=1.0
 
 # Database
-# SQLite is built-in, no extra package needed
+# SQLite is built-in
