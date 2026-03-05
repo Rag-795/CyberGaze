@@ -12,6 +12,12 @@ opencv-python>=4.8
 numpy>=1.24
 Pillow>=10.0
 
+# Encryption
+pycryptodome>=3.19
+
+# Liveness Detection (facial landmarks)
+dlib-bin>=19.24
+
 # Configuration
 python-dotenv>=1.0
 

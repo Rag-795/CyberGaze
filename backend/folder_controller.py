@@ -8,6 +8,11 @@ import shutil
 import platform
 import uuid
 
+# Import encryption engine (lazy to avoid circular imports)
+def _get_encryption_engine():
+    from encryption_engine import get_encryption_engine
+    return get_encryption_engine()
+
 
 # Prefix used to mark locked folders
 LOCK_PREFIX = ".cybergaze_locked_"
@@ -50,12 +55,14 @@ def is_folder_locked(path: str) -> bool:
     return os.path.exists(locked_path)
 
 
-def lock_folder(original_path: str) -> dict:
+def lock_folder(original_path: str, master_key: bytes = None) -> dict:
     """
     Lock a folder by renaming it with a hidden prefix.
+    If master_key is provided, encrypts all files before renaming.
     
     Args:
         original_path: Path to the folder to lock
+        master_key: Optional 32-byte AES key for encryption
         
     Returns:
         dict with success status and details
@@ -84,6 +91,23 @@ def lock_folder(original_path: str) -> dict:
                 'error': "A locked folder with this name already exists"
             }
         
+        # Encrypt files if master key provided
+        encryption_result = None
+        if master_key:
+            try:
+                engine = _get_encryption_engine()
+                encryption_result = engine.encrypt_folder(original_path, master_key)
+                if not encryption_result['success']:
+                    return {
+                        'success': False,
+                        'error': f"Encryption failed: {encryption_result['errors']}"
+                    }
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': f"Encryption failed: {str(e)}"
+                }
+        
         # Rename folder to lock it
         os.rename(original_path, locked_path)
         
@@ -96,12 +120,18 @@ def lock_folder(original_path: str) -> dict:
             except Exception as e:
                 print(f"Could not set hidden attribute: {e}")
         
-        return {
+        result = {
             'success': True,
             'original_path': original_path,
             'locked_path': locked_path,
-            'message': "Folder locked successfully"
+            'message': "Folder locked successfully",
+            'encrypted': master_key is not None
         }
+        
+        if encryption_result:
+            result['encrypted_files'] = encryption_result['encrypted_count']
+        
+        return result
         
     except PermissionError:
         return {
@@ -115,12 +145,14 @@ def lock_folder(original_path: str) -> dict:
         }
 
 
-def unlock_folder(original_path: str) -> dict:
+def unlock_folder(original_path: str, master_key: bytes = None) -> dict:
     """
     Unlock a folder by restoring its original name.
+    If master_key is provided, decrypts all files after renaming.
     
     Args:
         original_path: Original path of the folder (before locking)
+        master_key: Optional 32-byte AES key for decryption
         
     Returns:
         dict with success status and details
@@ -160,11 +192,28 @@ def unlock_folder(original_path: str) -> dict:
         # Rename folder to unlock it
         os.rename(locked_path, original_path)
         
-        return {
+        # Decrypt files if master key provided
+        decryption_result = None
+        if master_key:
+            try:
+                engine = _get_encryption_engine()
+                decryption_result = engine.decrypt_folder(original_path, master_key)
+                if not decryption_result['success']:
+                    print(f"Warning: Some files failed to decrypt: {decryption_result['errors']}")
+            except Exception as e:
+                print(f"Warning: Decryption failed: {str(e)}")
+        
+        result = {
             'success': True,
             'original_path': original_path,
-            'message': "Folder unlocked successfully"
+            'message': "Folder unlocked successfully",
+            'decrypted': master_key is not None
         }
+        
+        if decryption_result:
+            result['decrypted_files'] = decryption_result['decrypted_count']
+        
+        return result
         
     except PermissionError:
         return {

@@ -37,6 +37,14 @@ const elements = {
 
     // Connection status
     connectionStatus: document.getElementById('connection-status'),
+
+    // Security Logs
+    auditLogList: document.getElementById('audit-log-list'),
+    logFilterType: document.getElementById('log-filter-type'),
+    btnRefreshLogs: document.getElementById('btn-refresh-logs'),
+    threatLevel: document.getElementById('threat-level'),
+    activeLockouts: document.getElementById('active-lockouts'),
+    totalEvents: document.getElementById('total-events'),
 };
 
 // ============ State ============
@@ -50,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initWindowControls();
     initEnrollment();
     initFolders();
+    initSecurityLogs();
     checkBackendConnection();
     loadDashboardStats();
 
@@ -92,6 +101,11 @@ function switchView(viewId) {
     // Stop camera when leaving enrollment view
     if (viewId !== 'enroll' && mediaStream) {
         stopCamera();
+    }
+
+    // Auto-load security logs when switching to security view
+    if (viewId === 'security') {
+        loadAuditLogs();
     }
 }
 
@@ -634,3 +648,117 @@ function showToast(type, title, message, duration = 4000) {
 
 // Periodic connection check
 setInterval(checkBackendConnection, 30000);
+
+// ============ Security Logs ============
+function initSecurityLogs() {
+    if (elements.btnRefreshLogs) {
+        elements.btnRefreshLogs.addEventListener('click', loadAuditLogs);
+    }
+    if (elements.logFilterType) {
+        elements.logFilterType.addEventListener('change', loadAuditLogs);
+    }
+}
+
+async function loadAuditLogs() {
+    try {
+        const filterType = elements.logFilterType ? elements.logFilterType.value : '';
+        const url = filterType
+            ? `${API_BASE_URL}/audit-logs?event_type=${filterType}&limit=50`
+            : `${API_BASE_URL}/audit-logs?limit=50`;
+
+        const [logsData, threatData] = await Promise.all([
+            apiCall(url.replace(API_BASE_URL, '')),
+            apiCall('/security-status')
+        ]);
+
+        // Update threat overview cards
+        if (threatData && threatData.threat_analysis) {
+            const ta = threatData.threat_analysis;
+            if (elements.threatLevel) {
+                elements.threatLevel.textContent = (ta.threat_level || 'low').toUpperCase();
+                elements.threatLevel.className = `stat-value threat-${ta.threat_level || 'low'}`;
+            }
+            if (elements.activeLockouts) {
+                elements.activeLockouts.textContent = ta.active_lockouts || 0;
+            }
+        }
+
+        if (logsData && logsData.entries) {
+            if (elements.totalEvents) {
+                elements.totalEvents.textContent = logsData.total || 0;
+            }
+            renderAuditLogs(logsData.entries);
+        }
+    } catch (error) {
+        console.error('Failed to load audit logs:', error);
+    }
+}
+
+function renderAuditLogs(entries) {
+    if (!elements.auditLogList) return;
+
+    if (!entries || entries.length === 0) {
+        elements.auditLogList.innerHTML = `
+            <div class="empty-state">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                <h3>No security events yet</h3>
+                <p>Events will appear here as you use the application</p>
+            </div>`;
+        return;
+    }
+
+    const eventIcons = {
+        'ENROLL': '👤',
+        'VERIFY': '🔍',
+        'LOCK': '🔒',
+        'UNLOCK': '🔓',
+        'SPOOF_ATTEMPT': '⚠️',
+        'LIVENESS_FAIL': '❌',
+        'LOCKOUT': '🚫',
+        'ACCOUNT_UNLOCKED': '✅'
+    };
+
+    const eventLabels = {
+        'ENROLL': 'Face Enrolled',
+        'VERIFY': 'Verification',
+        'LOCK': 'Folder Locked',
+        'UNLOCK': 'Folder Unlocked',
+        'SPOOF_ATTEMPT': 'Spoof Attempt',
+        'LIVENESS_FAIL': 'Liveness Failed',
+        'LOCKOUT': 'Account Lockout',
+        'ACCOUNT_UNLOCKED': 'Account Unlocked'
+    };
+
+    elements.auditLogList.innerHTML = entries.map(entry => {
+        const icon = eventIcons[entry.event_type] || '📋';
+        const label = eventLabels[entry.event_type] || entry.event_type;
+        const ts = new Date(entry.timestamp).toLocaleString();
+        const statusClass = entry.success ? 'log-success' : 'log-failure';
+        const statusText = entry.success ? 'Success' : 'Failed';
+        const details = entry.details || {};
+        let detailStr = '';
+        if (details.similarity !== undefined) detailStr = `Similarity: ${(details.similarity * 100).toFixed(1)}%`;
+        if (details.spoof_score !== undefined) detailStr = `Spoof Score: ${details.spoof_score}`;
+        if (details.reason) detailStr = details.reason;
+        if (details.encrypted !== undefined) detailStr = details.encrypted ? 'Encrypted' : 'No encryption';
+        if (details.decrypted !== undefined) detailStr = details.decrypted ? 'Decrypted' : 'No decryption';
+
+        return `
+            <div class="audit-log-entry ${statusClass}">
+                <div class="log-icon">${icon}</div>
+                <div class="log-content">
+                    <div class="log-header">
+                        <span class="log-type">${label}</span>
+                        <span class="log-status ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="log-meta">
+                        ${entry.user_id ? `<span class="log-user">User: ${entry.user_id}</span>` : ''}
+                        ${detailStr ? `<span class="log-detail">${detailStr}</span>` : ''}
+                    </div>
+                    <div class="log-time">${ts}</div>
+                </div>
+            </div>`;
+    }).join('');
+}

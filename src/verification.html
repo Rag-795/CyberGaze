@@ -220,6 +220,70 @@
             font-size: 48px;
             margin-bottom: 8px;
         }
+
+        .challenge-box {
+            text-align: center;
+            padding: 16px;
+            background: rgba(0, 245, 212, 0.08);
+            border: 1px solid rgba(0, 245, 212, 0.2);
+            border-radius: var(--border-radius);
+            width: 100%;
+            display: none;
+        }
+
+        .challenge-box.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .challenge-box .challenge-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .challenge-box .challenge-text {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--accent-primary);
+        }
+
+        .challenge-box .challenge-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: var(--bg-tertiary);
+            border-radius: 2px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .progress-bar.active {
+            display: block;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
     </style>
 </head>
 
@@ -254,13 +318,23 @@
             Position your face in the circle
         </div>
 
+        <div class="challenge-box" id="challenge-box">
+            <div class="challenge-icon" id="challenge-icon">👁️</div>
+            <div class="challenge-text" id="challenge-text">Loading challenge...</div>
+            <div class="challenge-sub" id="challenge-sub">Stay still and follow instructions</div>
+        </div>
+
+        <div class="progress-bar" id="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+
         <button class="btn btn-primary" id="btn-verify">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="16 12 12 8 8 12" />
                 <line x1="12" y1="16" x2="12" y2="8" />
             </svg>
-            Verify & Unlock
+            Verify &amp; Unlock
         </button>
     </div>
 
@@ -279,6 +353,18 @@
             statusText: document.getElementById('status-text'),
             btnVerify: document.getElementById('btn-verify'),
             btnClose: document.getElementById('btn-close'),
+            challengeBox: document.getElementById('challenge-box'),
+            challengeIcon: document.getElementById('challenge-icon'),
+            challengeText: document.getElementById('challenge-text'),
+            challengeSub: document.getElementById('challenge-sub'),
+            progressBar: document.getElementById('progress-bar'),
+            progressFill: document.getElementById('progress-fill'),
+        };
+
+        const CHALLENGE_ICONS = {
+            'blink_twice': '👁️',
+            'turn_left': '⬅️',
+            'turn_right': '➡️',
         };
 
         // Initialize
@@ -326,37 +412,102 @@
             try {
                 elements.btnVerify.disabled = true;
                 elements.cameraContainer.classList.add('verifying');
-                elements.statusText.textContent = 'Verifying your face...';
+                elements.statusText.textContent = 'Starting liveness verification...';
                 elements.statusText.className = 'status-text';
 
-                // Capture frame
-                const canvas = elements.canvas;
-                const video = elements.video;
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
+                // Step 1: Get liveness challenge
+                elements.statusText.textContent = 'Getting liveness challenge...';
+                const challengeData = await fetch(`${API_BASE_URL}/get-challenge`)
+                    .then(r => r.json());
 
-                const ctx = canvas.getContext('2d');
-                ctx.translate(canvas.width, 0);
-                ctx.scale(-1, 1);
-                ctx.drawImage(video, 0, 0);
+                if (!challengeData.success) {
+                    throw new Error(challengeData.error || 'Failed to get challenge');
+                }
 
-                const imageData = canvas.toDataURL('image/jpeg', 0.9);
+                // Step 2: Show challenge instructions
+                const challengeType = challengeData.challenge;
+                elements.challengeBox.classList.add('active');
+                elements.challengeIcon.textContent = CHALLENGE_ICONS[challengeType] || '🔒';
+                elements.challengeText.textContent = challengeData.instruction;
+                elements.challengeSub.textContent = `You have ${challengeData.duration_seconds} seconds`;
+                elements.statusText.textContent = 'Follow the instruction above';
 
-                // Verify face
+                // Brief pause to let user read the instruction
+                await new Promise(r => setTimeout(r, 1500));
+
+                // Step 3: Capture multiple frames for liveness
+                elements.statusText.textContent = 'Capturing... follow the instruction!';
+                elements.progressBar.classList.add('active');
+
+                const totalFrames = 30;
+                const durationMs = challengeData.duration_seconds * 1000;
+                const interval = durationMs / totalFrames;
+                const frames = [];
+
+                for (let i = 0; i < totalFrames; i++) {
+                    const canvas = elements.canvas;
+                    const video = elements.video;
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+
+                    const ctx = canvas.getContext('2d');
+                    ctx.save();
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(video, 0, 0);
+                    ctx.restore();
+
+                    frames.push(canvas.toDataURL('image/jpeg', 0.7));
+
+                    // Update progress
+                    const progress = ((i + 1) / totalFrames) * 100;
+                    elements.progressFill.style.width = `${progress}%`;
+
+                    await new Promise(r => setTimeout(r, interval));
+                }
+
+                elements.progressBar.classList.remove('active');
+                elements.challengeBox.classList.remove('active');
+
+                // Step 4: Verify liveness
+                elements.statusText.textContent = 'Analyzing liveness...';
+                const livenessResult = await fetch(`${API_BASE_URL}/verify-liveness`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        challenge_id: challengeData.challenge_id,
+                        frames: frames
+                    })
+                }).then(r => r.json());
+
+                if (!livenessResult.verified) {
+                    throw new Error(livenessResult.message || livenessResult.error || 'Liveness check failed. Please try again.');
+                }
+
+                // Step 5: Verify face identity
+                elements.statusText.textContent = 'Verifying face identity...';
+
+                // Use the middle frame for face verification
+                const midFrame = frames[Math.floor(frames.length / 2)];
+
                 const verifyResult = await fetch(`${API_BASE_URL}/verify`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         user_id: ownerId,
-                        image: imageData
+                        image: midFrame
                     })
                 }).then(r => r.json());
 
                 if (!verifyResult.success || !verifyResult.verified) {
-                    throw new Error(verifyResult.error || 'Face verification failed');
+                    if (verifyResult.spoof_detected) {
+                        throw new Error('Spoof detected! Please use your real face.');
+                    }
+                    throw new Error(verifyResult.error || verifyResult.message || 'Face verification failed');
                 }
 
-                // Unlock folder
+                // Step 6: Unlock folder
+                elements.statusText.textContent = 'Unlocking and decrypting folder...';
                 const unlockResult = await fetch(`${API_BASE_URL}/unlock-folder`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -374,7 +525,12 @@
                 // Success!
                 elements.cameraContainer.classList.remove('verifying');
                 elements.cameraContainer.classList.add('success');
-                elements.statusText.innerHTML = '<div class="result-icon">✓</div>Folder unlocked successfully!';
+
+                let successMsg = 'Folder unlocked successfully!';
+                if (unlockResult.decrypted) {
+                    successMsg += ` (${unlockResult.decrypted_files || 0} files decrypted)`;
+                }
+                elements.statusText.innerHTML = `<div class="result-icon">✓</div>${successMsg}`;
                 elements.statusText.classList.add('success');
 
                 // Notify main window
@@ -387,12 +543,14 @@
 
                 setTimeout(() => {
                     closeWindow();
-                }, 1500);
+                }, 2000);
 
             } catch (error) {
                 console.error('Verification error:', error);
                 elements.cameraContainer.classList.remove('verifying');
                 elements.cameraContainer.classList.add('failed');
+                elements.challengeBox.classList.remove('active');
+                elements.progressBar.classList.remove('active');
                 elements.statusText.innerHTML = `<div class="result-icon">✗</div>${error.message}`;
                 elements.statusText.classList.add('error');
 
@@ -402,7 +560,7 @@
                     elements.statusText.textContent = 'Try again - position your face in the circle';
                     elements.statusText.className = 'status-text';
                     elements.btnVerify.disabled = false;
-                }, 2000);
+                }, 3000);
             }
         }
 

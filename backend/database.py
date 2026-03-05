@@ -30,10 +30,17 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT UNIQUE NOT NULL,
             embedding TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # Migration: add status column if missing (for existing databases)
+    try:
+        cursor.execute('ALTER TABLE users ADD COLUMN status TEXT DEFAULT \'active\'')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     
     # Folders table - stores folder metadata
     cursor.execute('''
@@ -42,11 +49,23 @@ def init_database():
             folder_id TEXT UNIQUE NOT NULL,
             original_path TEXT NOT NULL,
             is_locked INTEGER DEFAULT 0,
+            is_encrypted INTEGER DEFAULT 0,
+            encryption_salt BLOB,
             owner_id TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (owner_id) REFERENCES users (user_id)
         )
     ''')
+
+    # Migration: add encryption columns if missing (for existing databases)
+    try:
+        cursor.execute('ALTER TABLE folders ADD COLUMN is_encrypted INTEGER DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE folders ADD COLUMN encryption_salt BLOB')
+    except sqlite3.OperationalError:
+        pass
     
     conn.commit()
     conn.close()
@@ -137,6 +156,56 @@ def user_exists(user_id: str) -> bool:
     conn.close()
     
     return exists
+
+
+def update_user_status(user_id: str, status: str) -> bool:
+    """Update user status (active, locked)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            UPDATE users SET status = ?, updated_at = ? WHERE user_id = ?
+        ''', (status, datetime.now(), user_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"Error updating user status: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_user_status(user_id: str) -> str:
+    """Get user status (active, locked)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute('SELECT status FROM users WHERE user_id = ?', (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return row['status'] or 'active'
+    return None
+
+
+def update_folder_encryption_status(folder_id: str, is_encrypted: bool, salt: bytes = None) -> bool:
+    """Update folder encryption status and salt"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            UPDATE folders SET is_encrypted = ?, encryption_salt = ? WHERE folder_id = ?
+        ''', (1 if is_encrypted else 0, salt, folder_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"Error updating folder encryption status: {e}")
+        return False
+    finally:
+        conn.close()
 
 
 # ============ Folder Operations ============

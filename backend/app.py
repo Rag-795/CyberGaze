@@ -11,13 +11,18 @@ import os
 from database import (
     save_user_embedding, get_user_embedding, get_all_users,
     user_exists, delete_user, add_folder, update_folder_lock_status,
-    get_folder, get_folder_by_path, get_all_folders, delete_folder
+    get_folder, get_folder_by_path, get_all_folders, delete_folder,
+    update_user_status, get_user_status, update_folder_encryption_status
 )
 from face_module import get_face_recognition
 from folder_controller import (
     lock_folder, unlock_folder, generate_folder_id,
     get_folder_info, format_size, is_folder_locked
 )
+from encryption_engine import get_encryption_engine
+from liveness_module import get_liveness_detector
+from anti_spoof import get_spoof_detector
+from audit_logger import get_audit_logger
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -25,6 +30,16 @@ CORS(app)  # Enable CORS for Electron app communication
 
 # Get face recognition instance
 face_recognition = get_face_recognition()
+
+# Get encryption engine instance
+encryption_engine = get_encryption_engine()
+
+# Get liveness detector and spoof detector instances
+liveness_detector = get_liveness_detector()
+spoof_detector = get_spoof_detector()
+
+# Get audit logger instance
+audit_logger = get_audit_logger()
 
 
 # ============ Health Check ============
@@ -79,12 +94,15 @@ def enroll_face():
         # Save embedding to database
         if save_user_embedding(user_id, embedding):
             is_new = not user_exists(user_id)
+            audit_logger.log_event(audit_logger.EVENT_ENROLL, user_id=user_id, success=True)
             return jsonify({
                 'success': True,
                 'message': 'Face enrolled successfully' if is_new else 'Face updated successfully',
                 'user_id': user_id
             })
         else:
+            audit_logger.log_event(audit_logger.EVENT_ENROLL, user_id=user_id, success=False,
+                                   details={'reason': 'Database save failed'})
             return jsonify({
                 'success': False,
                 'error': 'Failed to save face data'
@@ -134,6 +152,14 @@ def verify_face():
                 'error': 'User not enrolled. Please enroll first.'
             }), 404
         
+        # Check lockout status
+        lockout = audit_logger.is_locked_out(user_id)
+        if lockout['locked']:
+            return jsonify({
+                'success': False,
+                'error': lockout['message']
+            }), 429
+        
         # Extract embedding from live image
         live_embedding = face_recognition.extract_embedding_from_base64(image_data)
         
@@ -143,8 +169,41 @@ def verify_face():
                 'error': 'No face detected. Please position your face in the camera.'
             }), 400
         
+        # Anti-spoof check on the live image
+        try:
+            import base64
+            import io
+            from PIL import Image
+            import numpy as np
+            
+            b64_data = image_data.split(',')[1] if ',' in image_data else image_data
+            image_bytes = base64.b64decode(b64_data)
+            pil_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+            frame_array = np.array(pil_image)
+            import cv2
+            bgr_frame = cv2.cvtColor(frame_array, cv2.COLOR_RGB2BGR)
+            
+            spoof_result = spoof_detector.analyze_texture(bgr_frame)
+            if not spoof_result['is_real']:
+                audit_logger.log_event(audit_logger.EVENT_SPOOF, user_id=user_id,
+                                       success=False, details={'spoof_score': spoof_result['spoof_score']})
+                return jsonify({
+                    'success': True,
+                    'verified': False,
+                    'spoof_detected': True,
+                    'spoof_score': spoof_result['spoof_score'],
+                    'message': 'Spoof detected! Please use a real face, not a photo or screen.'
+                })
+        except Exception as spoof_err:
+            print(f"Anti-spoof check error (continuing): {spoof_err}")
+        
         # Compare embeddings
         result = face_recognition.verify(stored_embedding, live_embedding)
+        
+        # Log verification attempt
+        audit_logger.log_event(audit_logger.EVENT_VERIFY, user_id=user_id,
+                               success=result['match'],
+                               details={'similarity': result['similarity']})
         
         return jsonify({
             'success': True,
@@ -199,6 +258,12 @@ def lock_folder_endpoint():
         # Normalize path
         folder_path = os.path.normpath(folder_path)
         
+        # Derive encryption key from stored face embedding
+        stored_embedding = get_user_embedding(owner_id)
+        master_key = None
+        if stored_embedding is not None:
+            master_key = encryption_engine.derive_key(stored_embedding)
+        
         # Check if folder is already in database
         existing_folder = get_folder_by_path(folder_path)
         
@@ -209,25 +274,32 @@ def lock_folder_endpoint():
                     'error': 'Folder is already locked'
                 }), 400
             
-            # Lock existing folder
-            result = lock_folder(folder_path)
+            # Lock existing folder (with encryption)
+            result = lock_folder(folder_path, master_key=master_key)
             
             if result['success']:
                 update_folder_lock_status(existing_folder['folder_id'], True)
+                if master_key:
+                    update_folder_encryption_status(existing_folder['folder_id'], True)
                 
             return jsonify(result)
         
         # Add new folder and lock it
         folder_id = generate_folder_id()
         
-        # Lock the folder first
-        result = lock_folder(folder_path)
+        # Lock the folder (with encryption)
+        result = lock_folder(folder_path, master_key=master_key)
         
         if result['success']:
             # Add to database
             add_folder(folder_id, folder_path, owner_id)
             update_folder_lock_status(folder_id, True)
+            if master_key:
+                update_folder_encryption_status(folder_id, True)
             result['folder_id'] = folder_id
+            audit_logger.log_event(audit_logger.EVENT_LOCK, user_id=owner_id,
+                                   folder_id=folder_id, success=True,
+                                   details={'encrypted': master_key is not None})
         
         return jsonify(result)
         
@@ -286,11 +358,22 @@ def unlock_folder_endpoint():
                     'error': 'You do not have permission to unlock this folder'
                 }), 403
         
-        # Unlock the folder
-        result = unlock_folder(folder_path)
+        # Derive decryption key from stored embedding
+        stored_embedding = get_user_embedding(user_id)
+        master_key = None
+        if stored_embedding is not None:
+            master_key = encryption_engine.derive_key(stored_embedding)
+        
+        # Unlock the folder (with decryption)
+        result = unlock_folder(folder_path, master_key=master_key)
         
         if result['success'] and folder_record:
             update_folder_lock_status(folder_record['folder_id'], False)
+            if master_key:
+                update_folder_encryption_status(folder_record['folder_id'], False)
+            audit_logger.log_event(audit_logger.EVENT_UNLOCK, user_id=user_id,
+                                   folder_id=folder_record['folder_id'], success=True,
+                                   details={'decrypted': master_key is not None})
         
         return jsonify(result)
         
@@ -512,6 +595,113 @@ def check_user_exists(user_id):
     })
 
 
+# ============ Liveness Detection ============
+
+@app.route('/get-challenge', methods=['GET'])
+def get_challenge():
+    """
+    Generate a random liveness challenge.
+    
+    Returns:
+    {
+        "challenge_id": "uuid",
+        "challenge": "blink_twice|turn_left|turn_right",
+        "instruction": "human-readable instruction",
+        "duration_seconds": 3
+    }
+    """
+    try:
+        challenge = liveness_detector.generate_challenge()
+        return jsonify({
+            'success': True,
+            **challenge
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Failed to generate challenge: {str(e)}'
+        }), 500
+
+
+@app.route('/verify-liveness', methods=['POST'])
+def verify_liveness():
+    """
+    Verify liveness challenge with captured frames.
+    
+    Request body:
+    {
+        "challenge_id": "uuid",
+        "frames": ["base64_frame1", "base64_frame2", ...]
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        challenge_id = data.get('challenge_id')
+        frames = data.get('frames', [])
+        
+        if not challenge_id:
+            return jsonify({'success': False, 'error': 'challenge_id is required'}), 400
+        
+        if not frames or len(frames) < 5:
+            return jsonify({
+                'success': False,
+                'error': 'At least 5 frames required for liveness verification'
+            }), 400
+        
+        # Verify the liveness challenge
+        result = liveness_detector.verify_challenge(challenge_id, frames)
+        
+        return jsonify({
+            'success': True,
+            **result
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Liveness verification failed: {str(e)}'
+        }), 500
+
+
+@app.route('/security-status', methods=['GET'])
+def security_status():
+    """Get security module status."""
+    threat = audit_logger.analyze_threats()
+    return jsonify({
+        'success': True,
+        'liveness_available': liveness_detector.is_available,
+        'encryption_available': True,
+        'anti_spoof_available': True,
+        'threat_analysis': threat
+    })
+
+
+@app.route('/audit-logs', methods=['GET'])
+def get_audit_logs():
+    """Get paginated audit log entries."""
+    limit = request.args.get('limit', 50, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    event_type = request.args.get('event_type', None)
+    user_id = request.args.get('user_id', None)
+    
+    logs = audit_logger.get_audit_logs(
+        limit=limit, offset=offset,
+        event_type=event_type, user_id=user_id
+    )
+    return jsonify({'success': True, **logs})
+
+
+@app.route('/threat-analysis', methods=['GET'])
+def get_threat_analysis():
+    """Get threat analysis report."""
+    user_id = request.args.get('user_id', None)
+    analysis = audit_logger.analyze_threats(user_id)
+    return jsonify({'success': True, **analysis})
+
 # ============ Main Entry Point ============
 
 if __name__ == '__main__':
@@ -519,6 +709,9 @@ if __name__ == '__main__':
     print("CyberGaze Backend Server")
     print("=" * 50)
     print("Starting server on http://localhost:5000")
+    print(f"Liveness Detection: {'Available' if liveness_detector.is_available else 'Limited (dlib not installed)'}")
+    print(f"Anti-Spoofing: Available (LBP texture analysis)")
+    print(f"Encryption: Available (AES-256-GCM)")
     print("Press Ctrl+C to stop")
     print("=" * 50)
     

@@ -74,6 +74,12 @@
           </svg>
           <span>Face Enrollment</span>
         </button>
+        <button class="nav-btn" data-view="security">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+          <span>Security Logs</span>
+        </button>
       </div>
 
       <div class="nav-section bottom">
@@ -258,6 +264,80 @@
             </svg>
             <h3>No folders yet</h3>
             <p>Click "Add Folder" to start protecting your folders</p>
+          </div>
+        </div>
+      </section>
+      <!-- Security Logs View -->
+      <section class="view" id="view-security">
+        <div class="view-header">
+          <h1>Security Logs</h1>
+          <p>Monitor authentication events and threats</p>
+        </div>
+
+        <div class="security-overview">
+          <div class="stat-card">
+            <div class="stat-icon security-shield">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value" id="threat-level">Low</div>
+              <div class="stat-label">Threat Level</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon locked">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value" id="active-lockouts">0</div>
+              <div class="stat-label">Active Lockouts</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon enrolled">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-value" id="total-events">0</div>
+              <div class="stat-label">Total Events</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="security-filters">
+          <select id="log-filter-type" class="filter-select">
+            <option value="">All Events</option>
+            <option value="VERIFY">Verification</option>
+            <option value="ENROLL">Enrollment</option>
+            <option value="LOCK">Lock</option>
+            <option value="UNLOCK">Unlock</option>
+            <option value="SPOOF_ATTEMPT">Spoof Attempts</option>
+            <option value="LOCKOUT">Lockouts</option>
+          </select>
+          <button class="btn btn-ghost" id="btn-refresh-logs">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6" />
+              <path d="M1 20v-6h6" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+            Refresh
+          </button>
+        </div>
+
+        <div class="audit-log-list" id="audit-log-list">
+          <div class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            <h3>No security events yet</h3>
+            <p>Events will appear here as you use the application</p>
           </div>
         </div>
       </section>
